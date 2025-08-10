@@ -16,6 +16,7 @@ maintainers = [
 ]
 dependencies = [
     "opencv-python",
+    "numpy",
  ]
 classifiers = [
     "Development Status :: 3 - Alpha",
