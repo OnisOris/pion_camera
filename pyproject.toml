@@ -15,15 +15,13 @@ maintainers = [
     {name = "Michael", email = "onisoris@yandex.ru"}
 ]
 dependencies = [
-    "numpy>=1.22.0,<2.0.0; implementation_name=='pypy'",
-    "numpy>=2.1.0; implementation_name!='pypy'",
-    "pionsdk",
     "opencv-python",
  ]
 classifiers = [
     "Development Status :: 3 - Alpha",
     "Intended Audience :: Developers",
     "Topic :: Software Development :: Build Tools",
+    "Programming Language :: Python :: 3.9",
     "Programming Language :: Python :: 3.10",
     "Programming Language :: Python :: 3.11",
     "Programming Language :: Python :: 3.12",
