@@ -21,8 +21,12 @@ class PioServer:
         self.server.attach(None)
 
 
-if __name__ == "__main__":
+def main():
     Gst.init(None)
-    server = PioServer()
+    pioserver = PioServer()
     loop = GLib.MainLoop()
     loop.run()
+
+
+if __name__ == "__main__":
+    main()
