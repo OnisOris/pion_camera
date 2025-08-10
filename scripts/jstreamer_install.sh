@@ -36,13 +36,15 @@ install_pkg() {
   fi
 }
 
+echo "Пользователь: $REAL_USER"
+echo "Домашняя директория: $REAL_HOME"
+
+# --- Базовые зависимости ---
 install_pkg curl
 install_pkg git
 install_pkg python3-dev
 
-echo "Пользователь: $REAL_USER"
-echo "Домашняя директория: $REAL_HOME"
-
+# --- GStreamer (jstreamer) ---
 GST_PKGS=(
   libgstreamer1.0-dev
   libgstreamer-plugins-base1.0-dev
@@ -59,6 +61,13 @@ GST_PKGS=(
   gstreamer1.0-gtk3
   gstreamer1.0-qt5
   gstreamer1.0-pulseaudio
+  # Для RTSP-сервера и GI биндингов:
+  python3-gi
+  gir1.2-gstreamer-1.0
+  gir1.2-gst-rtsp-server-1.0
+  gir1.2-glib-2.0
+  libgirepository1.0-dev
+  libgstrtspserver-1.0-0
 )
 
 echo "🔎 Проверяем наличие jstreamer (gst-launch-1.0)..."
@@ -70,6 +79,20 @@ else
   apt-get install -y "${GST_PKGS[@]}"
 fi
 
+# Даже если gst-launch уже есть — дотащим GI/GIR пакеты на всякий случай
+apt-get install -y "${GST_PKGS[@]}"
+
+# Добавим пользователя в группу video (для доступа к /dev/video0)
+if getent group video >/dev/null; then
+  if id -nG "$REAL_USER" | grep -qw video; then
+    echo "✅ Пользователь $REAL_USER уже в группе video."
+  else
+    echo "👤 Добавляем $REAL_USER в группу video..."
+    usermod -aG video "$REAL_USER"
+  fi
+fi
+
+# --- Установка uv (под реального пользователя) ---
 if sudo -u "$REAL_USER" env PATH="$REAL_PATH" bash -c 'command -v uv &>/dev/null'; then
   echo "✅ uv уже установлен."
 else
@@ -77,6 +100,7 @@ else
   sudo -u "$REAL_USER" bash -c 'curl -LsSf https://astral.sh/uv/install.sh | sh'
 fi
 
+# --- Клонирование/обновление репозитория ---
 echo "🔒 Добавляем $INSTALL_DIR в безопасные директории Git..."
 sudo -u "$REAL_USER" git config --global --add safe.directory "$INSTALL_DIR" || true
 
@@ -95,7 +119,7 @@ else
   chown -R "$REAL_USER:$REAL_USER" "$INSTALL_DIR"
 fi
 
-# --- Создание venv на Python 3.13 через uv ---
+# --- Создание venv на системном Python + доступ к системным пакетам (gi) ---
 if [ -d "$VENV_DIR" ]; then
   echo "🗑️ Удаляем старое виртуальное окружение..."
   rm -rf "$VENV_DIR"
@@ -104,12 +128,24 @@ fi
 mkdir -p "$VENV_DIR"
 chown -R "$REAL_USER:$REAL_USER" "$VENV_DIR"
 
-echo "🐍 Создаём uv venv (Python 3.13)..."
-sudo -u "$REAL_USER" env PATH="$REAL_PATH" bash -c "\"$UV_BIN\" venv --python 3.13 \"$VENV_DIR\""
+SYS_PY=$(python3 -c 'import sys; print(f"{sys.version_info[0]}.{sys.version_info[1]}")')
+echo "🐍 Создаём uv venv (Python $SYS_PY, с system-site-packages)..."
+sudo -u "$REAL_USER" env PATH="$REAL_PATH" bash -c "\"$UV_BIN\" venv --python $SYS_PY --system-site-packages \"$VENV_DIR\""
 
 # --- Установка проекта в venv ---
 echo "📦 Устанавливаем pion_camera в venv (editable)..."
 sudo -u "$REAL_USER" env PATH="$REAL_PATH" bash -c "source \"$VENV_DIR/bin/activate\" && \"$UV_BIN\" pip install -U pip setuptools wheel && \"$UV_BIN\" pip install -e \"$INSTALL_DIR\""
+
+# --- Быстрый sanity-check на gi/GStreamer ---
+sudo -u "$REAL_USER" env PATH="$REAL_PATH" bash -c "source \"$VENV_DIR/bin/activate\" && python - <<'PY'
+import gi
+gi.require_version('Gst', '1.0')
+gi.require_version('GstRtspServer', '1.0')
+from gi.repository import Gst, GstRtspServer
+Gst.init(None)
+print('GI/GStreamer OK:', Gst.version())
+PY
+"
 
 # --- Скрипт запуска jstreamer ---
 echo "📝 Создаём скрипт запуска jstreamer: $JSTREAMER_RUN"
@@ -120,7 +156,7 @@ exec gst-launch-1.0 udpsrc port=9000 caps=application/x-rtp ! queue ! rtph264dep
 EOF
 chmod +x "$JSTREAMER_RUN"
 
-# --- Скрипт запуска Python-сервера (опционально; можно вызывать бинарь прямо) ---
+# --- Скрипт запуска Python-сервера ---
 echo "📝 Создаём скрипт запуска сервера камеры: $CAMERA_RUN"
 cat > "$CAMERA_RUN" << EOF
 #!/bin/bash
@@ -159,6 +195,7 @@ cat > /etc/systemd/system/pion-camera.service << EOF
 Description=Pion Camera Python Server
 After=network-online.target
 Wants=network-online.target
+ConditionPathExists=/dev/video0
 
 [Service]
 Type=simple
@@ -187,4 +224,3 @@ echo "✅ Установка завершена."
 echo "ℹ️ Проверка статуса:"
 echo "   systemctl status jstreamer.service"
 echo "   systemctl status pion-camera.service"
-
