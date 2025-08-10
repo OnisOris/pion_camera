@@ -1,4 +1,15 @@
+# /// script
+# dependencies = [
+#   "opencv-python",
+#   "numpy",
+# ]
+# ///
+import argparse
+import os
+import signal
 import socket
+import sys
+import time
 from abc import ABC, abstractmethod
 from typing import Optional
 
@@ -120,3 +131,92 @@ class SocketCamera(BaseCamera):
             )
             return frame
         return None
+
+
+def _has_display() -> bool:
+    # Простейшая эвристика наличия GUI
+    return bool(os.environ.get("DISPLAY")) or sys.platform.startswith("win")
+
+
+def run_loop(cam: BaseCamera, show_window: bool = True) -> None:
+    win = "pion_camera"
+    last_dump_ts = 0.0
+    dump_interval = 5.0  # сек, для headless
+
+    # Корректное завершение по Ctrl+C
+    stop = {"flag": False}
+
+    def _sigint_handler(*_):
+        stop["flag"] = True
+
+    signal.signal(signal.SIGINT, _sigint_handler)
+    signal.signal(signal.SIGTERM, _sigint_handler)
+
+    try:
+        if show_window:
+            try:
+                cv2.namedWindow(win, cv2.WINDOW_NORMAL)
+            except Exception:
+                # Если GUI недоступен — уходим в headless
+                show_window = False
+
+        while not stop["flag"]:
+            frame = cam.get_cv_frame()
+            if frame is None:
+                # Нет кадра — немного ждём и пробуем снова
+                time.sleep(0.01)
+                continue
+
+            if show_window:
+                cv2.imshow(win, frame)
+                if (cv2.waitKey(1) & 0xFF) == ord("q"):
+                    break
+            else:
+                # headless: периодически сбрасываем последний кадр на диск
+                now = time.time()
+                if now - last_dump_ts > dump_interval:
+                    cv2.imwrite("/tmp/last_frame.jpg", frame)
+                    last_dump_ts = now
+    finally:
+        # Освобождение ресурсов
+        if isinstance(cam, RTSPCamera):
+            cam.release()
+        try:
+            if show_window:
+                cv2.destroyAllWindows()
+        except Exception:
+            pass
+
+
+def main():
+    parser = argparse.ArgumentParser(description="Run camera reader")
+    parser.add_argument(
+        "--rtsp",
+        type=str,
+        help="RTSP URL, например rtsp://radxa:radxa@10.1.100.134/pioneer_streamer",
+    )
+    parser.add_argument("--sock-host", type=str, help="IP для SocketCamera")
+    parser.add_argument("--sock-port", type=int, help="порт для SocketCamera")
+    parser.add_argument(
+        "--headless",
+        action="store_true",
+        help="Без окна (сбрасывать кадры в /tmp/last_frame.jpg)",
+    )
+    args = parser.parse_args()
+
+    show = (not args.headless) and _has_display()
+
+    if args.rtsp:
+        cam = RTSPCamera(rtsp_url=args.rtsp)
+    elif args.sock_host and args.sock_port:
+        cam = SocketCamera(ip=args.sock_host, port=args.sock_port)
+    else:
+        # Значение по умолчанию из твоего примера
+        ip = "10.1.100.134"
+        cam = RTSPCamera(rtsp_url=f"rtsp://{ip}:8554/pioneer_stream")
+    print(cam.rtsp_url)
+    run_loop(cam, show_window=show)
+
+
+if __name__ == "__main__":
+    main()
