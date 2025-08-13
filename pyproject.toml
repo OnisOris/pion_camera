@@ -41,12 +41,6 @@ Issues = "https://github.com/OnisOris/pion_camera/issues"
 [project.scripts]
 start_server_radxa = "server.camera_server:main"
 
-[project.optional-dependencies]
-plotting = [
-    "matplotlib>=3.10.1",
-    "tornado",
-]
-
 [dependency-groups]
 dev = [
     "furo>=2024.8.6",
